@@ -256,6 +256,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if (rf.voteFor == args.CandidateID || rf.voteFor == -1) && (args.LastLogTerm < args.LastLogTerm || (args.LastLogIndex <= lastIndex && args.LastLogTerm == lastTerm)) {
 			reply.TermNum = rf.currentTerm
 			reply.VoteGranted = true
+			rf.resetTimeOut()
 		}
 	} else {
 		// Convert to follower and grant the vote
