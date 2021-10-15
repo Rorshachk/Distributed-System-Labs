@@ -233,6 +233,9 @@ type AppendEntryArgs struct {
 type AppendEntryReply struct {
 	TermNum int
 	Success bool
+
+	ConflictTerm int
+	TermIndex    int
 }
 
 //
@@ -321,6 +324,19 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			}
 			DPrintf("Server %v reject request, the prevLog is %v, the requested prevLogTerm is %v(%v)", rf.me, PrintLog, args.PrevLogTerm, args.PrevLogIndex)
 			DPrintf("Log: %v\n", rf.logs)
+
+			//Store the conflict termNum and the last index of it
+			if args.PrevLogIndex >= len(rf.logs) {
+				reply.ConflictTerm = -1
+				reply.TermIndex = len(rf.logs)
+			} else {
+				for i := args.PrevLogIndex; i > 0; i-- {
+					if rf.logs[i-1].TermNum != rf.logs[i].TermNum {
+						reply.TermIndex = i
+						reply.ConflictTerm = rf.logs[i].TermNum
+					}
+				}
+			}
 
 			reply.Success = false
 			rf.mu.Unlock()
@@ -566,15 +582,29 @@ func (rf *Raft) appendEntryTo(server int, args AppendEntryArgs) {
 		//fail bc of inconsistency
 		if reply.Success == false {
 			DPrintf("Leader %v failed to replicated because of prev inconsistency %v\n", rf.me, server)
-			rf.nextIndex[server]--
 			newArgs := AppendEntryArgs{}
-			newArgs.Entries = append([]LogEntry{rf.logs[args.PrevLogIndex]}, args.Entries...)
-			newArgs.PrevLogIndex = args.PrevLogIndex - 1
-			if newArgs.PrevLogIndex >= 0 {
-				newArgs.PrevLogTerm = rf.logs[newArgs.PrevLogIndex].TermNum
+			// rf.nextIndex[server]--
+			// newArgs.Entries = append([]LogEntry{rf.logs[args.PrevLogIndex]}, args.Entries...)
+			// newArgs.PrevLogIndex = args.PrevLogIndex - 1
+
+			// Calculate the nextIndex and PrevLogIndex by conflicting term
+			if reply.ConflictTerm == -1 {
+				rf.nextIndex[server] = reply.TermIndex
+				newArgs.PrevLogIndex = rf.nextIndex[server] - 1
 			} else {
-				newArgs.PrevLogTerm = 0
+				i := args.PrevLogIndex
+				for ; i >= reply.TermIndex && rf.logs[i].TermNum != reply.ConflictTerm; i-- {
+				}
+				newArgs.PrevLogIndex = i
+				rf.nextIndex[server] = newArgs.PrevLogIndex + 1
 			}
+			copy(newArgs.Entries, rf.logs[rf.nextIndex[server]:])
+
+			// if newArgs.PrevLogIndex >= 0 {
+			// 	newArgs.PrevLogTerm = rf.logs[newArgs.PrevLogIndex].TermNum
+			// } else {
+			// 	newArgs.PrevLogTerm = 0
+			// }
 			rf.mu.Unlock()
 			if rf.currentState == LeaderStatus && rf.currentTerm == args.TermNum {
 				rf.appendEntryTo(server, newArgs)
